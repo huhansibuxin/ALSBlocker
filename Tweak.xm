@@ -1,75 +1,63 @@
-// ALSBlocker — 禁用环境光传感器（ALS），让 True Tone 读不到光、不再随光暖屏。
+// ALSBlocker — 强制让 True Tone 丢弃环境光（ALS）颜色采样，屏幕白点恒定中性、不再随光变黄。
 //
 // 背景：
-//   老板的 iPhone 14 Pro Max（iOS 16.6, rootless）傍晚室外会整屏变黄，即使「原彩显示」
-//   在设置里显示为关。实测：True Tone 的光线读取在 backboardd 内（backboardd 是系统唯一
-//   链接 CoreBrightness.framework 的守护进程，launchctl 里无 corebrightnessd）。
-//   环境光在系统里是一条 HID 事件流：任何消费者（CoreBrightness/True Tone）都通过
-//   IOHIDEventSystemClient + SetMatching(PrimaryUsagePage=0xff00, PrimaryUsage=4) 去匹配
-//   并订阅 ALS（参照开源 tweak LightsOut 的 iokit.c）。
+//   老板的 iPhone 14 Pro Max（iOS 16.6, rootless）傍晚室外会整屏变黄，即使「原彩显示」在
+//   设置里显示为关。实测 True Tone 的光线读取在 backboardd 内（backboardd 是系统唯一链接
+//   CoreBrightness.framework 的守护进程，launchctl 里无独立 corebrightnessd）。
 //
-// 机制：
-//   hook backboardd 里的 IOHIDEventSystemClientSetMatching。当发现匹配参数是 ALS 时，
-//   替换为空字典 —— 该 client 永远匹配不到 ALS 服务 -> 收不到环境光事件 -> True Tone
-//   无光可感 -> 白点恒为中性 -> 屏幕不再随光变黄。
+// 路线A 机制（class-dump 实锤）：
+//   CoreBrightness 内部类 CBColorModuleiOS（True Tone 服务端）自带 ivar
+//   `_dropALSColorSamples`（BOOL，偏移 +0x120）。当它为 YES 时，苹果自己的代码会跳过
+//   ALS 颜色采样 -> 白点计算拿不到环境色温 -> 白点恒定不更新 -> 屏幕不再随光变黄。
+//   这是苹果自己留的开关，比外挂拦截 IOKit 更稳、更干净。
 //
-// 安全性：
-//   - 只拦截 ALS 匹配（usage page 0xff00 / usage 4），其它 HID 设备匹配原样放行；
-//   - 对 client 粒度生效，不动 CoreBrightness 其它逻辑；
-//   - 影响面：自动亮度（老板本来就关）+ True Tone，均为预期。
+// 注入目标：com.apple.backboardd（CoreBrightness 服务端宿主）。
 //
-// 安装后：TrollFools 注入 / make install 会自动重启 backboardd。
-//   若装完仍残留暖色（True Tone 可能缓存了旧白点），重启一次手机即可让 True Tone
-//   在"无传感器"状态下重新求值 -> 中性白。
-//   想恢复：TrollFools 里移除本插件，或 SSH `mv /var/jb/usr/lib/TweakInject/ALSBlocker.dylib{,.disabled}` 后 reboot。
+// 验收（重启/杀 backboardd 加载后）：
+//   - 原彩关 -> 傍晚室外不变黄（解决初衷）；
+//   - 原彩开 -> 无 ALS 输入，白点恒定不随光跳，一般也不黄。
+//
+// 恢复：TrollFools 移除，或 SSH `mv /var/jb/usr/lib/TweakInject/ALSBlocker.dylib{,.disabled}` 后 reboot。
 
 #import <substrate.h>
-#import <CoreFoundation/CoreFoundation.h>
+#import <Foundation/Foundation.h>
+#import <os/log.h>
 
-// ---- IOKit HID 相关声明（IOKit 已通过 Makefile 链接）----
-// 注意：.xm 是 ObjC++，C 函数声明必须包 extern "C"，
-// 否则会被 C++ name mangling 成 C++ 符号，链接时找不到 IOKit.tbd 里的 C 符号
-// （报错形如：found '_IOHIDEventSystemClientSetMatching' ... declaration possibly missing 'extern "C"'）
-typedef CFTypeRef IOHIDEventSystemClientRef;
-#ifdef __cplusplus
-extern "C" {
-#endif
-void IOHIDEventSystemClientSetMatching(IOHIDEventSystemClientRef client, CFDictionaryRef matching);
-#ifdef __cplusplus
-}
-#endif
+// 前向声明：CBColorModuleiOS 是 CoreBrightness 私有类，无公开头文件。
+// Logos 运行时按名字查找该类，找不到则本 %hook 静默失效，不会崩。
+@interface CBColorModuleiOS : NSObject
+- (id)init;
+- (id)start;
+@end
 
-// 判断某次 SetMatching 是否在请求"环境光传感器"
-// 依据 LightsOut 源码：ALS 的 HID usage 是 PrimaryUsagePage = 0xff00, PrimaryUsage = 4。
-static BOOL ALSBlocker_IsALSRequest(CFDictionaryRef matching) {
-    if (!matching || CFGetTypeID(matching) != CFDictionaryGetTypeID()) {
-        return NO;
-    }
-    // CFDictionaryGetValue 返回 const void*，ObjC++ 需显式强转（LightsOut 是纯 C 所以不需要）
-    CFNumberRef pageNum  = (CFNumberRef)CFDictionaryGetValue(matching, CFSTR("PrimaryUsagePage"));
-    CFNumberRef usageNum = (CFNumberRef)CFDictionaryGetValue(matching, CFSTR("PrimaryUsage"));
-    if (!pageNum || !usageNum) {
-        return NO;
-    }
-    int page  = 0;
-    int usage = 0;
-    CFNumberGetValue(pageNum,  kCFNumberSInt32Type, &page);
-    CFNumberGetValue(usageNum, kCFNumberSInt32Type, &usage);
-    return (page == 0xff00 && usage == 4);
+static os_log_t ALSBlockerLog(void) {
+    static os_log_t log = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        log = os_log_create("com.alsblocker", "tweak");
+    });
+    return log;
 }
 
-%hookf(void, IOHIDEventSystemClientSetMatching, IOHIDEventSystemClientRef client, CFDictionaryRef matching) {
-    if (ALSBlocker_IsALSRequest(matching)) {
-        // 换成空匹配：让该 client 永远找不到 ALS 服务，等于拔掉光线传感器的"数据线"
-        CFDictionaryRef empty = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0,
-                                                   &kCFTypeDictionaryKeyCallBacks,
-                                                   &kCFTypeDictionaryValueCallBacks);
-        if (empty) {
-            %orig(client, empty);
-            CFRelease(empty);
-            return;
-        }
-    }
-    // 非 ALS 的匹配（触摸、按键等 HID）原样放行
-    %orig(client, matching);
+// 把 True Tone 的 ALS 颜色采样丢弃开关钉死为 YES。
+static inline void ALSBlocker_DropALS(id self) {
+    if (!self) return;
+    MSHookIvar<BOOL>(self, "_dropALSColorSamples") = YES;
+    os_log(ALSBlockerLog(), "ALSBlocker: _dropALSColorSamples = YES");
 }
+
+%hook CBColorModuleiOS
+
+- (id)init {
+    id s = %orig;
+    ALSBlocker_DropALS(s);
+    return s;
+}
+
+- (id)start {
+    id r = %orig;
+    ALSBlocker_DropALS(self);
+    return r;
+}
+
+%end
