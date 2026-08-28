@@ -1,0 +1,16 @@
+=== captured from /var/jb/tmp/alsblocker.log on 192.168.3.156 (SpringBoard, v1.5.0) ===
+
+2026-08-28 08:46:33 +0000 [SpringBoard] loaded (v1.5.0, route C, scalar-signature fix, deferred 3s to SpringBoard launch)
+2026-08-28 08:46:37 +0000 [SpringBoard] deferred probe fired (SpringBoard launched) — begin client API probe
+2026-08-28 08:46:37 +0000 [SpringBoard] CBClient class found
+2026-08-28 08:46:37 +0000 [SpringBoard] CBClient inited
+2026-08-28 08:46:37 +0000 [SpringBoard] adaptationClient got
+2026-08-28 08:46:37 +0000 [SpringBoard] supported=1 enabledBefore=0
+2026-08-28 08:46:37 +0000 [SpringBoard] setEnabled(NO) ok=1 -> getEnabled=0 (expect 0)
+2026-08-28 08:46:40 +0000 [SpringBoard] WATCHDOG: enabled flipped back to YES -> re-assert NO
+2026-08-28 08:46:40 +0000 [SpringBoard] setEnabled(NO) ok=1 -> getEnabled=0 (expect 0)
+2026-08-28 08:46:48 +0000 [SpringBoard] WATCHDOG: enabled flipped back to YES -> re-assert NO
+2026-08-28 08:46:48 +0000 [SpringBoard] setEnabled(NO) ok=1 -> getEnabled=0 (expect 0)
+2026-08-28 08:46:54 +0000 [SpringBoard] WATCHDOG: enabled flipped back to YES -> re-assert NO
+... (repeats every ~3-8s) ...
+2026-08-28 08:47:37 +0000 [SpringBoard] probe window ended (60s), stopping watchdog

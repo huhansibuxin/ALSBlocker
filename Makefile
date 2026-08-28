@@ -1,7 +1,7 @@
 export TARGET = iphone:clang:latest:15.0
 export ARCHS = arm64e
 
-INSTALL_TARGET_PROCESSES = SpringBoard
+INSTALL_TARGET_PROCESSES = backboardd
 export _THEOS_PLATFORM_DPKG_DEB_COMPRESSION = gzip
 export THEOS_PACKAGE_SCHEME = rootless
 
