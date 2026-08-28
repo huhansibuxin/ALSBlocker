@@ -1,7 +1,7 @@
 Package: com.huhansibuxin.alsblocker
 Name: ALSBlocker
 Depends: ellekit
-Version: 1.6.0
+Version: 1.7.0
 Architecture: iphoneos-arm64
 Description: Disable the ambient light sensor (ALS) so True Tone never auto-warms the screen with ambient light. For users who never use True Tone / auto-brightness.
 Maintainer: huhansibuxin
