@@ -1,15 +1,16 @@
-// ALSBlocker — 探针 + 修复版（v1.1.0）
+// ALSBlocker — 修复版（v1.2.0，SpringBoard only）
 //
-// 目的：
-//   1) 确认 CBColorModuleiOS 到底在 SpringBoard 还是 backboardd 被实例化（日志打印进程名）；
-//   2) 在确认到的宿主里，钉死苹果自留开关 _dropALSColorSamples=YES，使 True Tone 不再随环境光变黄。
+// 背景：v1.1.0 同时注入 SpringBoard+backboardd，实测往 backboardd 注入并 hook CoreBrightness 类
+// 会直接把 backboardd 搞崩（无安全模式兜底 = 变砖），且判空保护排除了"ivar 坏地址"假设，确认是
+// "注入 backboardd"本身不稳定。故本版只注入 SpringBoard（有安全模式，最坏进安全模式卸掉，绝不砖）。
 //
-// 安全设计（避免再次变砖）：
-//   - Filter 同时覆盖 SpringBoard + backboardd，两个进程都挂 hook，靠日志判断宿主。
+// 目的：在 SpringBoard 里钉死苹果自留开关 _dropALSColorSamples=YES，使 True Tone 不再随环境光变黄。
+//
+// 安全设计：
+//   - 仅注入 SpringBoard（安全模式兜底）。
 //   - MSHookIvar 前先用 class_getInstanceVariable 判空：ivar 找不到就跳过，绝不写坏地址 -> 不可能 SIGSEGV。
-//   - %ctor 开头查文件 kill-switch /var/jb/tmp/alsblocker.disable：万一异常，SSH `touch` 它再 reboot 即可恢复，
-//     不依赖安全模式（backboardd 崩溃无安全模式兜底）。
-//   - 所有动作写日志到 /var/jb/tmp/alsblocker.log，安装后读这个文件即可知道宿主与是否生效。
+//   - %ctor 开头查文件 kill-switch /var/jb/tmp/alsblocker.disable：万一异常，SSH `touch` 它再 reboot 即可恢复。
+//   - 所有动作写日志到 /var/jb/tmp/alsblocker.log，安装后读这个文件即可知道 hook 是否生效。
 //
 // 验收：原彩关 -> 傍晚室外不变黄；原彩开 -> 白点恒定不随光跳。
 // 恢复：TrollFools 移除，或 SSH `mv /var/jb/usr/lib/TweakInject/ALSBlocker.dylib{,.disabled}` 后 reboot；
