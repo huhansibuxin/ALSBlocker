@@ -1,16 +1,20 @@
-// ALSBlocker — 探针版 v1.3.0（SpringBoard only，路线C 验证）
+// ALSBlocker — 探针版 v1.4.0（SpringBoard only，路线C 验证，延迟执行修复）
 //
 // 背景：路线A（hook CBColorModuleiOS 钉 _dropALSColorSamples）已实锤死路：
 //   - backboardd 注入 -> 崩/砖（无安全模式）；
-//   - SpringBoard 注入 -> 模块不在 SpringBoard 实例化，hook 永不触发（日志铁证：
-//     只有 `loaded`，从没出现 `init called` / `= YES applied`）。
+//   - SpringBoard 注入 -> 模块不在 SpringBoard 实例化，hook 永不触发（日志铁证）。
 // 活的真·调色模块在 backboardd；SpringBoard 只持有 CoreBrightness 客户端
 // CBClient -> _adaptationClient（CBAdaptationClient）。
 //
 // 本版（路线C 探针）：在 SpringBoard 内用 CBAdaptationClient 客户端 API
 // 强制 setEnabled:NO 关掉环境光适配（= 关 True Tone），发 Framework 级命令给
 // backboardd 模块，不 hook、不写 ivar、不碰 backboardd -> 绝不变砖。
-// 并做有界观察窗口（15s）监测 enabled 是否被系统翻回，用于判定机制是否生效。
+//
+// v1.4.0 修复（针对 v1.3.0 崩溃）：
+//   v1.3.0 在 %ctor（dyld 加载期）同步初始化 CBClient，此时 SpringBoard 尚未启动、
+//   CoreBrightness 客户端 XPC 未就绪，拿到野指针 -> objc_retain -> SIGSEGV -> 进安全模式。
+//   本版把全部 CoreBrightness 客户端调用移出 %ctor，推迟到主队列延迟 3s 执行
+//   （SpringBoard 已完全启动、客户端已就绪）。%ctor 本身绝不碰 CoreBrightness。
 //
 // 仅注入 SpringBoard（安全模式兜底）。文件 kill-switch：/var/jb/tmp/alsblocker.disable。
 // 启动即清空旧日志，避免与上一版混淆。
@@ -45,7 +49,8 @@ static BOOL ALSBlockerDisabled(void) {
     return access("/var/jb/tmp/alsblocker.disable", F_OK) == 0;
 }
 
-// 客户端 API 前向声明（CoreBrightness 私有，无公开头；签名取自设备 CoreBrightness.h）
+// 客户端 API 前向声明（CoreBrightness 私有，无公开头；签名取自设备 CoreBrightness.h：
+// setEnabled:/getEnabled 返回与参数均为 id/NSNumber，故 @(NO) 与 boolValue 正确）。
 @interface CBAdaptationClient : NSObject
 - (id)setEnabled:(id)arg0;
 - (id)getEnabled;
@@ -77,23 +82,21 @@ static void ALSApplyDisable(void) {
     }
 }
 
-%ctor {
-    // 每次启动清空旧日志，避免与上一版混淆（老板要求：更新版本清旧日志）
-    @try { [[NSFileManager defaultManager] removeItemAtPath:ALSLogPath() error:nil]; } @catch (id e) {}
-
-    if (ALSBlockerDisabled()) {
-        ALSLog(@"DISABLED via kill-switch file, not touching adaptation");
-        return;
-    }
-    ALSLog(@"loaded (probe v1.3.0, route C)");
-
+// 核心探针逻辑：全部 CoreBrightness 客户端调用集中在此，且仅在 SpringBoard 启动后执行。
+static void ALSProbeRun(void) {
+    ALSLog(@"deferred probe fired (SpringBoard launched) — begin client API probe");
     @try {
         Class cbCls = NSClassFromString(@"CBClient");
         if (!cbCls) { ALSLog(@"CBClient class NOT found"); return; }
+        ALSLog(@"CBClient class found");
+
         id client = [[cbCls alloc] init];
-        if (!client) { ALSLog(@"CBClient init failed"); return; }
+        if (!client) { ALSLog(@"CBClient init returned nil"); return; }
+        ALSLog(@"CBClient inited");
+
         sAdaptationClient = [client adaptationClient];
         if (!sAdaptationClient) { ALSLog(@"adaptationClient is nil"); return; }
+        ALSLog(@"adaptationClient got");
 
         id sup = [sAdaptationClient supported];
         id before = [sAdaptationClient getEnabled];
@@ -121,6 +124,24 @@ static void ALSApplyDisable(void) {
         });
         dispatch_resume(timer);
     } @catch (id e) {
-        ALSLog(@"ctor EXC %@", e);
+        ALSLog(@"probe EXC %@", e);
     }
+}
+
+%ctor {
+    // 每次启动清空旧日志，避免与上一版混淆（老板要求：更新版本清旧日志）
+    @try { [[NSFileManager defaultManager] removeItemAtPath:ALSLogPath() error:nil]; } @catch (id e) {}
+
+    if (ALSBlockerDisabled()) {
+        ALSLog(@"DISABLED via kill-switch file, not touching adaptation");
+        return;
+    }
+    ALSLog(@"loaded (probe v1.4.0, route C, deferred 3s to SpringBoard launch)");
+
+    // 关键修复：绝不在 %ctor（dyld 加载期）同步碰 CoreBrightness。
+    // 推迟到主队列延迟 3s，此时 SpringBoard 已完全启动、CoreBrightness 客户端已就绪。
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3ULL * NSEC_PER_SEC),
+                   dispatch_get_main_queue(), ^{
+        ALSProbeRun();
+    });
 }
