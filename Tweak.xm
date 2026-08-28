@@ -36,8 +36,9 @@ static BOOL ALSBlocker_IsALSRequest(CFDictionaryRef matching) {
     if (!matching || CFGetTypeID(matching) != CFDictionaryGetTypeID()) {
         return NO;
     }
-    CFNumberRef pageNum  = CFDictionaryGetValue(matching, CFSTR("PrimaryUsagePage"));
-    CFNumberRef usageNum = CFDictionaryGetValue(matching, CFSTR("PrimaryUsage"));
+    // CFDictionaryGetValue 返回 const void*，ObjC++ 需显式强转（LightsOut 是纯 C 所以不需要）
+    CFNumberRef pageNum  = (CFNumberRef)CFDictionaryGetValue(matching, CFSTR("PrimaryUsagePage"));
+    CFNumberRef usageNum = (CFNumberRef)CFDictionaryGetValue(matching, CFSTR("PrimaryUsage"));
     if (!pageNum || !usageNum) {
         return NO;
     }
