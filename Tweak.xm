@@ -27,8 +27,17 @@
 #import <CoreFoundation/CoreFoundation.h>
 
 // ---- IOKit HID 相关声明（IOKit 已通过 Makefile 链接）----
+// 注意：.xm 是 ObjC++，C 函数声明必须包 extern "C"，
+// 否则会被 C++ name mangling 成 C++ 符号，链接时找不到 IOKit.tbd 里的 C 符号
+// （报错形如：found '_IOHIDEventSystemClientSetMatching' ... declaration possibly missing 'extern "C"'）
 typedef CFTypeRef IOHIDEventSystemClientRef;
-extern void IOHIDEventSystemClientSetMatching(IOHIDEventSystemClientRef client, CFDictionaryRef matching);
+#ifdef __cplusplus
+extern "C" {
+#endif
+void IOHIDEventSystemClientSetMatching(IOHIDEventSystemClientRef client, CFDictionaryRef matching);
+#ifdef __cplusplus
+}
+#endif
 
 // 判断某次 SetMatching 是否在请求"环境光传感器"
 // 依据 LightsOut 源码：ALS 的 HID usage 是 PrimaryUsagePage = 0xff00, PrimaryUsage = 4。
